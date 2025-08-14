@@ -1,0 +1,109 @@
+{# templates/admin/matches/quick_add.html #}
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="text-muted">Ajouter et gérer les matchs du championnat GN</div>
+    <a href="{% url 'admin:index' %}" class="btn btn-link p-0">Retour Admin</a>
+  </div>
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert alert-{{ m.tags|default:'info' }}">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="card">
+    <div class="card-body">
+      <h3 class="card-title mb-4">Ajouter un nouveau match</h3>
+
+      <form method="post" class="vstack gap-3">
+        {% csrf_token %}
+
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Équipe 1</label>
+            <input list="clubs" name="home" class="form-control" placeholder="Équipe 1">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Équipe 2</label>
+            <input list="clubs" name="away" class="form-control" placeholder="Équipe 2">
+          </div>
+        </div>
+
+        <datalist id="clubs">
+          {% for n in clubs %}<option value="{{ n }}"></option>{% endfor %}
+        </datalist>
+
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Score équipe 1</label>
+            <input type="number" min="0" step="1" name="home_score" class="form-control" placeholder="0">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Score équipe 2</label>
+            <input type="number" min="0" step="1" name="away_score" class="form-control" placeholder="0">
+          </div>
+        </div>
+
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Minute</label>
+            <input name="minute" class="form-control" placeholder="78'">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Statut</label>
+            <select name="status" class="form-select">
+              {% for code,label in STATUSES %}
+                <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Journée</label>
+            <select name="round_id" class="form-select">
+              <option value="">(par défaut)</option>
+              {% for r in rounds %}
+                <option value="{{ r.id }}">J{{ r.number|default:r.id }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-primary mt-2">Ajouter le match</button>
+      </form>
+    </div>
+  </div>
+
+  <h4 class="mt-4">Liste des derniers matchs</h4>
+  <div class="card">
+    <div class="card-body p-0">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>#</th><th>Journée</th><th>Équipe 1</th><th>Équipe 2</th>
+            <th>Score</th><th>Minute</th><th>Statut</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in matches %}
+            <tr>
+              <td>{{ m.id }}</td>
+              <td>{% if m.round %}J{{ m.round.number|default:m.round.id }}{% else %}-{% endif %}</td>
+              <td>{{ m.home_club.name }}</td>
+              <td>{{ m.away_club.name }}</td>
+              <td>{{ m.home_score }}–{{ m.away_score }}</td>
+              <td>{{ m.minute }}</td>
+              <td>{{ m.get_status_display|default:m.status }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="text-muted">Aucun match</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
