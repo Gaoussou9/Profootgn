@@ -1,0 +1,62 @@
+# =========================
+# Python / Django
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packages
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Media & static
+/media/
+staticfiles/
+*.collectstatic
+
+# Environnements
+.env
+.env.*  
+!env.example   # garde seulement un exemple sans secrets
+
+# =========================
+# Virtualenv / venv
+# =========================
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# =========================
+# Node / React (Vite)
+# =========================
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# IDE / OS files
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

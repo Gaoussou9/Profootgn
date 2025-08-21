@@ -15,43 +15,76 @@
     {% endfor %}
   {% endif %}
 
+  <style>
+    /* ---- Picker d'équipes (logos) ---- */
+    .club-picker{position:relative}
+    .club-dropdown{position:absolute;z-index:30;left:0;right:0;max-height:260px;overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:.5rem;box-shadow:0 12px 28px rgba(0,0,0,.08);display:none}
+    .club-item{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;cursor:pointer}
+    .club-item:hover{background:#f3f4f6}
+    .club-item img{width:28px;height:28px;object-fit:contain;border-radius:.375rem;background:#f9fafb}
+    .club-selected{display:flex;align-items:center;gap:.5rem}
+    .club-selected img{width:28px;height:28px;object-fit:contain;border-radius:.375rem;background:#f9fafb}
+
+    /* ---- Table match sélectionnable ---- */
+    .match-row{cursor:pointer;}
+    .match-row.active{background:#eef6ff;}
+  </style>
+
   <div class="card">
     <div class="card-body">
       <h3 class="card-title mb-4">Ajouter un nouveau match</h3>
 
-      <form method="post" class="vstack gap-3">
+      <!-- On empêche le submit natif : tout passe par JS -->
+      <form method="post" class="vstack gap-3" onsubmit="return false;">
         {% csrf_token %}
 
         <div class="row g-2">
+          <!-- Équipe 1 -->
           <div class="col-md-6">
             <label class="form-label">Équipe 1</label>
-            <input list="clubs" name="home" class="form-control" placeholder="Équipe 1">
+            <div class="club-picker" id="picker-home">
+              <div class="club-selected mb-1" style="display:none">
+                <img alt="logo" />
+                <strong class="name"></strong>
+                <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1 clear" title="Effacer">×</button>
+              </div>
+              <input type="text" class="form-control input" placeholder="Cliquer pour choisir…" autocomplete="off">
+              <input type="hidden" name="home_id" class="id">
+              <div class="club-dropdown list"></div>
+            </div>
           </div>
+
+          <!-- Équipe 2 -->
           <div class="col-md-6">
             <label class="form-label">Équipe 2</label>
-            <input list="clubs" name="away" class="form-control" placeholder="Équipe 2">
+            <div class="club-picker" id="picker-away">
+              <div class="club-selected mb-1" style="display:none">
+                <img alt="logo" />
+                <strong class="name"></strong>
+                <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-1 clear" title="Effacer">×</button>
+              </div>
+              <input type="text" class="form-control input" placeholder="Cliquer pour choisir…" autocomplete="off">
+              <input type="hidden" name="away_id" class="id">
+              <div class="club-dropdown list"></div>
+            </div>
           </div>
         </div>
-
-        <datalist id="clubs">
-          {% for n in clubs %}<option value="{{ n }}"></option>{% endfor %}
-        </datalist>
 
         <div class="row g-2">
           <div class="col-md-6">
             <label class="form-label">Score équipe 1</label>
-            <input type="number" min="0" step="1" name="home_score" class="form-control" placeholder="0">
+            <input type="number" min="0" step="1" name="home_score" class="form-control" value="0">
           </div>
           <div class="col-md-6">
             <label class="form-label">Score équipe 2</label>
-            <input type="number" min="0" step="1" name="away_score" class="form-control" placeholder="0">
+            <input type="number" min="0" step="1" name="away_score" class="form-control" value="0">
           </div>
         </div>
 
         <div class="row g-2">
           <div class="col-md-4">
             <label class="form-label">Minute</label>
-            <input name="minute" class="form-control" placeholder="78'">
+            <input type="number" min="0" step="1" name="minute" class="form-control" value="0">
           </div>
           <div class="col-md-4">
             <label class="form-label">Statut</label>
@@ -72,7 +105,45 @@
           </div>
         </div>
 
-        <button class="btn btn-primary mt-2">Ajouter le match</button>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Kickoff (YYYY-MM-DD HH:MM:SS)</label>
+            <input name="kickoff_at" class="form-control" placeholder="2025-08-20 16:00:00">
+          </div>
+        </div>
+
+        <!-- Buteurs (textareas éditables) -->
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Buteurs équipe 1</label>
+            <textarea id="goals-home-ta" class="form-control" rows="3" placeholder="ex: Camara 12', 54'; Diallo 77'"></textarea>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Buteurs équipe 2</label>
+            <textarea id="goals-away-ta" class="form-control" rows="3" placeholder="ex: Bah 44'"></textarea>
+          </div>
+        </div>
+
+        <!-- Boutons -->
+        <div class="mt-2 d-flex align-items-center flex-wrap gap-2">
+          <input id="match-id" class="form-control form-control-sm" style="width:160px" placeholder="ID du match" aria-label="ID du match">
+
+          <button id="btn-add"     class="btn btn-primary">Ajouter le match</button>
+          <button id="btn-start"   class="btn btn-success"            disabled>Démarrer</button>
+          <button id="btn-pause"   class="btn btn-dark"               disabled>Pause (HT)</button>
+          <button id="btn-finish"  class="btn btn-outline-secondary"  disabled>Fin du match</button>
+
+          <span id="live-clock" class="badge bg-secondary ms-2" style="display:none">0'</span>
+
+          <button id="btn-edit"    class="btn btn-outline-primary"   disabled>Modifier / Edit</button>
+          <button id="btn-susp"    class="btn btn-outline-warning"   disabled>Suspendre</button>
+          <!-- ★ Nouveaux boutons état admin -->
+          <button id="btn-sched"   class="btn btn-outline-primary"   disabled>Prévu</button>
+          <button id="btn-post"    class="btn btn-outline-info"      disabled>Reporté</button>
+          <button id="btn-cancel"  class="btn btn-outline-danger"    disabled>Annulé</button>
+          <button id="btn-del"     class="btn btn-outline-danger"    disabled>Supprimer</button>
+        </div>
+        <small id="action-tip" class="text-muted d-block mt-1"></small>
       </form>
     </div>
   </div>
@@ -84,26 +155,522 @@
         <thead>
           <tr>
             <th>#</th><th>Journée</th><th>Équipe 1</th><th>Équipe 2</th>
-            <th>Score</th><th>Minute</th><th>Statut</th>
+            <th>Score</th><th>Minute</th><th>Statut</th><th>Buteur (texte)</th>
           </tr>
         </thead>
         <tbody>
           {% for m in matches %}
-            <tr>
+            <tr class="match-row" data-id="{{ m.id }}">
               <td>{{ m.id }}</td>
               <td>{% if m.round %}J{{ m.round.number|default:m.round.id }}{% else %}-{% endif %}</td>
               <td>{{ m.home_club.name }}</td>
               <td>{{ m.away_club.name }}</td>
               <td>{{ m.home_score }}–{{ m.away_score }}</td>
               <td>{{ m.minute }}</td>
-              <td>{{ m.get_status_display|default:m.status }}</td>
+              <td>{{ m.status }}</td>
+              <td>{{ m.buteur }}</td>
             </tr>
           {% empty %}
-            <tr><td colspan="7" class="text-muted">Aucun match</td></tr>
+            <tr><td colspan="8" class="text-muted">Aucun match</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
 </div>
+
+<script>
+/* ===== Utils ===== */
+function getCSRF(){const m=document.cookie.match(/csrftoken=([^;]+)/);return m?m[1]:"";}
+const $=id=>document.getElementById(id);
+
+/* État live */
+let currentMatchId=null, liveTimer=null, liveMinute=0, isPaused=false;
+/* 60 000 ms = 1 minute (mode normal) */
+const TICK_MS=60000;
+
+/* Helpers timer */
+function stopTicker(){ if(liveTimer){ clearInterval(liveTimer); liveTimer=null; } }
+function startTicker(){
+  stopTicker();
+  liveTimer=setInterval(async()=>{
+    if(isPaused) return;
+    liveMinute = Math.min(liveMinute + 1, 90);
+    $('live-clock').textContent = `${liveMinute}'`;
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row){ row.querySelectorAll('td')[5].textContent = liveMinute; }
+
+    if(liveMinute >= 90){
+      stopTicker();
+      const r = await postForm('/api/modifier.py', { id: currentMatchId, minute: 90, status: 'FT' });
+      $('action-tip').textContent = r.ok ? `Match ${currentMatchId} terminé (90', FT).` : `Fin de match: échec de mise à jour.`;
+      $('live-clock').style.display = 'none';
+      if(row){ row.querySelectorAll('td')[6].textContent = 'FT'; }
+      return;
+    }
+    await postForm('/api/modifier.py', { id: currentMatchId, minute: liveMinute, status: 'LIVE' });
+  }, TICK_MS);
+}
+
+/* =========================
+   PICKER CLUBS AVEC LOGOS
+   ========================= */
+let CLUBS_CACHE=null;
+async function fetchClubs(){
+  if(CLUBS_CACHE) return CLUBS_CACHE;
+  const r = await fetch('/api/clubs/');
+  const data = await r.json();
+  CLUBS_CACHE = Array.isArray(data) ? data : (data.results || []);
+  return CLUBS_CACHE;
+}
+function renderList(el, items){
+  el.innerHTML = items.map(c => `
+    <div class="club-item" data-id="${c.id}" data-name="${c.name}" data-logo="${c.logo_url||''}">
+      <img src="${c.logo_url||''}" alt=""><span>${c.name}</span>
+    </div>
+  `).join('');
+}
+function installPicker(root){
+  const input = root.querySelector('.input');
+  const list  = root.querySelector('.list');
+  const idFld = root.querySelector('.id');
+  const sel   = root.querySelector('.club-selected');
+  const selImg= sel.querySelector('img');
+  const selNm = sel.querySelector('.name');
+  const btnClr= sel.querySelector('.clear');
+  let all = [];
+
+  const open = ()=>{ list.style.display='block'; };
+  const close= ()=>{ list.style.display='none'; };
+
+  fetchClubs().then(clubs => { all = clubs; renderList(list, all); });
+
+  input.addEventListener('focus', open);
+  input.addEventListener('click', open);
+  document.addEventListener('click', (e)=>{ if(!root.contains(e.target)) close(); });
+
+  input.addEventListener('input', ()=>{
+    const q = input.value.toLowerCase().trim();
+    const filtered = q ? all.filter(c => c.name.toLowerCase().includes(q)) : all;
+    renderList(list, filtered); open();
+  });
+
+  list.addEventListener('click', (e)=>{
+    const item = e.target.closest('.club-item'); if(!item) return;
+    const id = item.dataset.id, name = item.dataset.name, logo = item.dataset.logo || '';
+    idFld.value = id; input.value = name; selImg.src = logo || ''; selNm.textContent = name; sel.style.display = 'flex'; close();
+  });
+
+  btnClr.addEventListener('click', ()=>{ idFld.value = ''; input.value = ''; sel.style.display = 'none'; });
+}
+installPicker(document.getElementById('picker-home'));
+installPicker(document.getElementById('picker-away'));
+
+/* Setter programmatique pour les pickers (lors du chargement d'un match) */
+function setPicker(selector, id, name, logo){
+  const root = document.querySelector(selector);
+  if(!root) return;
+  root.querySelector('.id').value = id || '';
+  root.querySelector('.input').value = name || '';
+  const sel = root.querySelector('.club-selected');
+  sel.querySelector('img').src = logo || '';
+  sel.querySelector('.name').textContent = name || '';
+  sel.style.display = name ? 'flex' : 'none';
+}
+
+/* =========================
+   BUTEURS (textareas -> bulk)
+   ========================= */
+function parseGoalsTextarea(str, clubId) {
+  const out = [];
+  if (!str || !clubId) return out;
+
+  const items = str.split(/[;,\n]+/).map(s => s.trim()).filter(Boolean);
+
+  for (const raw of items) {
+    const m = raw.match(/(\d{1,3})/);
+    const minute = m ? parseInt(m[1], 10) : 0;
+    const name = raw.replace(/(\d{1,3})'?/g, '').trim();
+
+    const g = { club: parseInt(clubId, 10), minute: isNaN(minute) ? 0 : minute };
+    if (/^\d+$/.test(name)) g.player = parseInt(name, 10);
+    else if (name) g.player_name = name;
+    out.push(g);
+  }
+  return out;
+}
+
+async function saveGoalsForMatch(matchId, replace=false) {
+  const homeId  = (document.querySelector('#picker-home .id').value || '').trim();
+  const awayId  = (document.querySelector('#picker-away .id').value || '').trim();
+  const homeStr = document.getElementById('goals-home-ta').value || '';
+  const awayStr = document.getElementById('goals-away-ta').value || '';
+
+  const goals = [
+    ...parseGoalsTextarea(homeStr, homeId),
+    ...parseGoalsTextarea(awayStr, awayId)
+  ];
+  if (!goals.length) return { ok: true, created: [] };
+
+  const r = await fetch('/api/goals/bulk/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRF() },
+    body: JSON.stringify({ match: matchId, replace, goals })
+  });
+  try { return await r.json(); } catch { return {}; }
+}
+
+/* =========================
+   CHARGER / PRÉ-REMPLIR
+   ========================= */
+function isoToLocalText(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function loadMatch(id){
+  const r = await fetch(`/api/matches/${id}/`);
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const m = await r.json();
+
+  setPicker('#picker-home', m.home_club, m.home_club_name, m.home_club_logo);
+  setPicker('#picker-away', m.away_club, m.away_club_name, m.away_club_logo);
+
+  document.querySelector('input[name="home_score"]').value = m.home_score ?? 0;
+  document.querySelector('input[name="away_score"]').value = m.away_score ?? 0;
+  document.querySelector('input[name="minute"]').value     = m.minute ?? 0;
+  document.querySelector('select[name="status"]').value    = m.status || 'SCHEDULED';
+  document.querySelector('select[name="round_id"]').value  = m.round || '';
+  document.querySelector('input[name="kickoff_at"]').value = isoToLocalText(m.datetime);
+
+  const hg = (m.goals || []).filter(g => Number(g.club) === Number(m.home_club))
+    .map(g => `${g.player_name || 'Inconnu'} ${g.minute || 0}'`).join('; ');
+  const ag = (m.goals || []).filter(g => Number(g.club) === Number(m.away_club))
+    .map(g => `${g.player_name || 'Inconnu'} ${g.minute || 0}'`).join('; ');
+  document.getElementById('goals-home-ta').value = hg;
+  document.getElementById('goals-away-ta').value = ag;
+
+  // état live / badge
+  const status = (m.status || '').toUpperCase();
+  liveMinute = parseInt(m.minute || 0, 10) || 0;
+  const badge = $('live-clock');
+
+  if (status === 'LIVE' && liveMinute < 90) {
+    isPaused = false;
+    badge.style.display = '';
+    badge.textContent = `${liveMinute}'`;
+    $('btn-pause').textContent = 'Pause (HT)';
+  } else if (status === 'HT') {
+    isPaused = true;
+    if (liveMinute < 45) liveMinute = 45;
+    badge.style.display = '';
+    badge.textContent = `45'`;
+    $('btn-pause').textContent = 'Reprendre 2ᵉ MT';
+  } else {
+    isPaused = false;
+    badge.style.display = 'none';
+  }
+}
+
+/* =========================
+   BOUTONS D'ACTION
+   ========================= */
+function enableActions(on,msg=""){
+  // Ajoute les nouveaux boutons ici
+  ['btn-edit','btn-del','btn-susp','btn-start','btn-pause','btn-finish','btn-sched','btn-post','btn-cancel'].forEach(id=>$(id).disabled=!on);
+  $('action-tip').textContent = on ? `Actions prêtes pour le match ID ${msg||currentMatchId}` : '';
+}
+
+async function postForm(url,obj){
+  const fd=new FormData();
+  Object.entries(obj).forEach(([k,v])=> v!==undefined && v!==null && fd.append(k,v));
+  const r=await fetch(url,{method:'POST',headers:{'X-CSRFToken':getCSRF()},body:fd});
+  try{return await r.json();}catch{return {};}
+}
+
+function valOrName(pickerId){
+  const root = document.querySelector(pickerId);
+  return {
+    id:   (root.querySelector('.id').value || '').trim(),
+    name: (root.querySelector('.input').value || '').trim(),
+  };
+}
+
+/* === AJOUTER === */
+$('btn-add').addEventListener('click',async(e)=>{
+  e.preventDefault();
+
+  const h = valOrName('#picker-home');
+  const a = valOrName('#picker-away');
+
+  if(!h.id && !h.name) return alert("Choisis l'équipe 1.");
+  if(!a.id && !a.name) return alert("Choisis l'équipe 2.");
+  if((h.id && a.id) && h.id === a.id) return alert("Les deux équipes ne peuvent pas être identiques.");
+  if(h.name && a.name && h.name.toLowerCase() === a.name.toLowerCase()) return alert("Les deux équipes ne peuvent pas être identiques.");
+
+  const payload={
+    home_id: h.id, team1: h.name,
+    away_id: a.id, team2: a.name,
+    score1: document.querySelector('input[name="home_score"]').value||0,
+    score2: document.querySelector('input[name="away_score"]').value||0,
+    minute: document.querySelector('input[name="minute"]').value||0,
+    status: document.querySelector('select[name="status"]').value,
+    journee:document.querySelector('select[name="round_id"]').value,
+    datetime:document.querySelector('input[name="kickoff_at"]').value
+  };
+
+  const j=await postForm('/api/ajouter.py',payload);
+  if(j.ok && j.id){
+    currentMatchId=j.id; $('match-id').value=j.id;
+    enableActions(true);
+    isPaused=false; liveMinute=parseInt(payload.minute||'0',10)||0;
+    $('btn-pause').textContent='Pause (HT)';
+    $('live-clock').style.display = '';
+    $('live-clock').textContent = `${liveMinute}'`;
+    $('action-tip').textContent=`Match ajouté (ID ${j.id}). Enregistrement des buteurs…`;
+
+    const g = await saveGoalsForMatch(j.id, true);
+    if(g && g.ok) {
+      $('action-tip').textContent=`Match ${j.id} ajouté. Buteurs enregistrés (${(g.created||[]).length}).`;
+    } else {
+      $('action-tip').textContent=`Match ${j.id} ajouté. (Buteurs non enregistrés)`;
+    }
+  }else{
+    enableActions(false);
+    alert('Erreur à l’ajout: '+(j.detail||JSON.stringify(j)));
+  }
+});
+
+/* cibler manuellement un match */
+$('match-id').addEventListener('input',()=>{
+  const v=$('match-id').value.trim();
+  currentMatchId=v||null;
+  enableActions(!!v,v);
+});
+
+/* === MODIFIER === */
+$('btn-edit').addEventListener('click', async ()=>{
+  if(!currentMatchId) return alert("Saisis un ID ou clique une ligne.");
+
+  const h = valOrName('#picker-home');
+  const a = valOrName('#picker-away');
+
+  const payload = {
+    id: currentMatchId,
+    home_id: h.id, team1: h.name,
+    away_id: a.id, team2: a.name,
+    home_score: document.querySelector('input[name="home_score"]').value || 0,
+    away_score: document.querySelector('input[name="away_score"]').value || 0,
+    minute:     document.querySelector('input[name="minute"]').value || 0,
+    status:     document.querySelector('select[name="status"]').value,
+    journee:    document.querySelector('select[name="round_id"]').value,
+    datetime:   document.querySelector('input[name="kickoff_at"]').value
+  };
+
+  const j = await postForm('/api/modifier.py', payload);
+  if(!j.ok) return alert('Modification impossible.');
+
+  const g = await saveGoalsForMatch(currentMatchId, true);
+  $('action-tip').textContent = `Match ${currentMatchId} modifié. Buteurs mis à jour (${(g.created||[]).length}).`;
+
+  try{
+    const r = await fetch(`/api/matches/${currentMatchId}/`);
+    const m = await r.json();
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row){
+      const tds = row.querySelectorAll('td');
+      tds[2].textContent = m.home_club_name;
+      tds[3].textContent = m.away_club_name;
+      tds[4].textContent = `${m.home_score}–${m.away_score}`;
+      tds[5].textContent = m.minute ?? 0;
+      tds[6].textContent = m.status;
+    }
+  }catch(_){}
+});
+
+/* === SUPPRIMER === */
+$('btn-del').addEventListener('click',async()=>{
+  if(!currentMatchId) return alert("Saisis un ID ou ajoute un match.");
+  if(!confirm(`Supprimer le match ${currentMatchId} ?`)) return;
+  const j=await postForm('/api/supprimer.py',{id:currentMatchId});
+  if(j.ok){
+    $('action-tip').textContent=`Match ${currentMatchId} supprimé.`;
+    enableActions(false);
+    stopTicker();
+    $('live-clock').style.display = 'none';
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row) row.remove();
+  } else { alert('Suppression impossible.'); }
+});
+
+/* === SUSPENDRE === */
+$('btn-susp').addEventListener('click',async()=>{
+  if(!currentMatchId) return alert("Saisis un ID ou ajoute un match.");
+  const j=await postForm('/api/suspendre.py',{id:currentMatchId});
+  if(j.ok){
+    $('action-tip').textContent=`Match ${currentMatchId} suspendu.`;
+    stopTicker();
+    $('live-clock').style.display = 'none';
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row){ row.querySelectorAll('td')[6].textContent = 'SUSPENDED'; }
+  } else { alert('Suspension impossible.'); }
+});
+
+/* === DÉMARRER (LIVE → minute++ → 90 = FT) === */
+$('btn-start').addEventListener('click',async()=>{
+  if(!currentMatchId) return alert("Saisis un ID ou ajoute un match.");
+  liveMinute=parseInt(document.querySelector('input[name="minute"]').value||'0',10)||0;
+  isPaused=false; $('btn-pause').textContent='Pause (HT)';
+  const j=await postForm('/api/modifier.py',{id:currentMatchId,status:'LIVE',minute:liveMinute});
+  if(!j.ok) return alert('Impossible de démarrer.');
+  $('action-tip').textContent=`Match ${currentMatchId} en cours… (LIVE)`;
+  $('live-clock').style.display = '';
+  $('live-clock').textContent = `${liveMinute}'`;
+  startTicker();
+});
+
+/* === PAUSE (HT) / REPRENDRE 2e MT === */
+$('btn-pause').addEventListener('click', async ()=>{
+  if(!currentMatchId) return;
+
+  if(!isPaused){
+    // Passer en HT
+    isPaused = true;
+    stopTicker();
+    if(liveMinute < 45) liveMinute = 45;
+    $('live-clock').style.display='';
+    $('live-clock').textContent = `45'`;
+    $('btn-pause').textContent = 'Reprendre 2ᵉ MT';
+
+    const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'HT', minute: liveMinute });
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row){
+      const tds=row.querySelectorAll('td');
+      tds[5].textContent = liveMinute;
+      tds[6].textContent = 'HT';
+    }
+    $('action-tip').textContent = r.ok ? `Mi-temps pour le match ${currentMatchId}.` : `Erreur pour passer en HT.`;
+  }else{
+    // Reprendre 2e mi-temps
+    isPaused = false;
+    if(liveMinute < 45) liveMinute = 45;
+    $('btn-pause').textContent = 'Pause (HT)';
+    $('live-clock').style.display='';
+    $('live-clock').textContent = `${liveMinute}'`;
+    const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'LIVE', minute: liveMinute });
+    const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+    if(row){ row.querySelectorAll('td')[6].textContent = 'LIVE'; }
+    $('action-tip').textContent = r.ok ? `Reprise de la 2ᵉ mi-temps pour le match ${currentMatchId}.` : `Erreur pour reprendre la 2ᵉ MT.`;
+    startTicker();
+  }
+});
+
+/* === FIN DU MATCH (FT, minute=90) === */
+$('btn-finish').addEventListener('click', async () => {
+  if (!currentMatchId) return alert("Saisis un ID ou clique une ligne.");
+
+  stopTicker();
+  isPaused = false;
+
+  const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'FT', minute: 90 });
+  if (!r.ok) return alert("Impossible de terminer le match.");
+
+  liveMinute = 90;
+  document.querySelector('input[name="minute"]').value = 90;
+  document.querySelector('select[name="status"]').value = 'FT';
+  $('action-tip').textContent = `Match ${currentMatchId} terminé (FT).`;
+  $('live-clock').style.display = 'none';
+
+  const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+  if (row) {
+    const tds = row.querySelectorAll('td');
+    tds[5].textContent = '90';
+    tds[6].textContent = 'FT';
+  }
+});
+
+/* === NOUVEAU : PRÉVU (SCHEDULED) === */
+$('btn-sched').addEventListener('click', async ()=>{
+  if (!currentMatchId) return alert("Saisis un ID ou clique une ligne.");
+  stopTicker();
+  isPaused = false;
+
+  const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'SCHEDULED', minute: 0 });
+  if(!r.ok) return alert("Impossible de passer en Prévu.");
+
+  liveMinute = 0;
+  document.querySelector('input[name="minute"]').value = 0;
+  document.querySelector('select[name="status"]').value = 'SCHEDULED';
+  $('live-clock').style.display = 'none';
+  $('action-tip').textContent = `Match ${currentMatchId} marqué comme Prévu.`;
+
+  const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+  if (row) {
+    const tds = row.querySelectorAll('td');
+    tds[5].textContent = '0';
+    tds[6].textContent = 'SCHEDULED';
+  }
+});
+
+/* === NOUVEAU : REPORTÉ (POSTPONED) === */
+$('btn-post').addEventListener('click', async ()=>{
+  if (!currentMatchId) return alert("Saisis un ID ou clique une ligne.");
+  stopTicker();
+  isPaused = false;
+
+  // Minute non significative → on peut la garder, ou la remettre à 0
+  const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'POSTPONED' });
+  if(!r.ok) return alert("Impossible de passer en Reporté.");
+
+  document.querySelector('select[name="status"]').value = 'POSTPONED';
+  $('live-clock').style.display = 'none';
+  $('action-tip').textContent = `Match ${currentMatchId} marqué comme Reporté.`;
+
+  const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+  if (row) {
+    row.querySelectorAll('td')[6].textContent = 'POSTPONED';
+  }
+});
+
+/* === NOUVEAU : ANNULÉ (CANCELED) === */
+$('btn-cancel').addEventListener('click', async ()=>{
+  if (!currentMatchId) return alert("Saisis un ID ou clique une ligne.");
+  stopTicker();
+  isPaused = false;
+
+  const r = await postForm('/api/modifier.py', { id: currentMatchId, status: 'CANCELED' });
+  if(!r.ok) return alert("Impossible de passer en Annulé.");
+
+  document.querySelector('select[name="status"]').value = 'CANCELED';
+  $('live-clock').style.display = 'none';
+  $('action-tip').textContent = `Match ${currentMatchId} marqué comme Annulé.`;
+
+  const row = document.querySelector(`tr.match-row[data-id="${currentMatchId}"]`);
+  if (row) {
+    row.querySelectorAll('td')[6].textContent = 'CANCELED';
+  }
+});
+
+/* === Interaction sur les lignes de la table === */
+document.querySelectorAll('tr.match-row').forEach(tr=>{
+  tr.addEventListener('click', async ()=>{
+    document.querySelectorAll('tr.match-row').forEach(x=>x.classList.remove('active'));
+    tr.classList.add('active');
+
+    const id = tr.dataset.id;
+    currentMatchId = id;
+    $('match-id').value = id;
+    enableActions(true, id);
+
+    try{
+      await loadMatch(id);
+      $('action-tip').textContent = `Match ${id} chargé. Tu peux modifier / mettre en pause / reprendre / finir / changer de statut.`;
+    }catch(e){
+      $('action-tip').textContent = `Impossible de charger le match ${id}.`;
+    }
+  });
+});
+</script>
 {% endblock %}

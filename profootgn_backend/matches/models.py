@@ -1,12 +1,12 @@
-
 from django.db import models
 from clubs.models import Club
 from players.models import Player
 
 MATCH_STATUS = [
-    ('SCHEDULED','Scheduled'),
-    ('LIVE','Live'),
-    ('FINISHED','Finished'),
+    ('SCHEDULED', 'Scheduled'),
+    ('LIVE', 'Live'),
+    ('FINISHED', 'Finished'),
+    ('SUSPENDED', 'Suspended'),  # ✅ ajouté
 ]
 
 class Round(models.Model):
@@ -28,8 +28,10 @@ class Match(models.Model):
     away_score = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=10, choices=MATCH_STATUS, default='SCHEDULED')
     minute = models.PositiveIntegerField(default=0)  # for live
-
     venue = models.CharField(max_length=120, blank=True)
+
+    # ✅ nouveau champ pour l’admin : nom du buteur
+    buteur = models.CharField(max_length=120, blank=True, default="", help_text="Nom du buteur principal")
 
     class Meta:
         ordering = ['datetime']
@@ -46,7 +48,7 @@ class Goal(models.Model):
     def __str__(self):
         return f"{self.player} {self.minute}'"
 
-CARD_TYPES = [('Y','Yellow'),('R','Red')]
+CARD_TYPES = [('Y', 'Yellow'), ('R', 'Red')]
 class Card(models.Model):
     match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name='cards')
     player = models.ForeignKey(Player, on_delete=models.SET_NULL, null=True, blank=True)

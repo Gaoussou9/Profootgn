@@ -13,6 +13,7 @@ STATUSES = [
     ("LIVE", "En cours"),
     ("HT", "Mi-temps"),
     ("FT", "Terminé"),
+    ("SUSPENDED", "Suspendu"),   # ✅ harmonisé avec nos endpoints
     ("POST", "Reporté"),
     ("CAN", "Annulé"),
 ]
@@ -24,11 +25,12 @@ def quick_add_match_view(request):
         away_name = (request.POST.get("away") or "").strip()
         home_score = int(request.POST.get("home_score") or 0)
         away_score = int(request.POST.get("away_score") or 0)
-        minute = (request.POST.get("minute") or "").strip()
-        status = request.POST.get("status") or "SCHEDULED"
+        minute = int(request.POST.get("minute") or 0)            # ✅ cast en int
+        status = (request.POST.get("status") or "SCHEDULED").upper()
         round_id = request.POST.get("round_id")
+        buteur = (request.POST.get("buteur") or "").strip()      # ✅ nouveau champ
 
-        # NEW: date/heure (facultatif côté formulaire)
+        # Date/heure (facultatif)
         kickoff_raw = (request.POST.get("kickoff_at") or "").strip()
         dt = parse_datetime(kickoff_raw) if kickoff_raw else None
         if dt is None:
@@ -66,7 +68,8 @@ def quick_add_match_view(request):
             minute=minute,
             status=status,
             round=rnd,
-            datetime=dt,        # ← IMPORTANT : plus de NULL
+            datetime=dt,
+            buteur=buteur,      # ✅ on stocke le nom du buteur
         )
         messages.success(request, "Match ajouté avec succès.")
         return redirect("admin_quick_match")
