@@ -1,31 +1,57 @@
+# matches/admin.py
 from django.contrib import admin
-from .models import Match, Goal, Card, Round
+from .models import Match, Round, Goal, Card
+
+
+class GoalInline(admin.TabularInline):
+    model = Goal
+    extra = 0
+    fields = ("club", "player", "minute")
+
+
+class CardInline(admin.TabularInline):
+    model = Card
+    extra = 0
+    fields = ("club", "player", "type", "minute")
+
 
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
-    list_display = ("datetime", "home_club", "home_score", "away_score", "away_club", "status")
-    list_filter = ("status", "datetime", "round")
-    # requis si on utilise autocomplete_fields :
+    list_display = (
+        "id",
+        "round",
+        "datetime",
+        "home_club",
+        "away_club",
+        "home_score",
+        "away_score",
+        "status",
+        "minute",
+    )
+    list_filter = ("status", "round")
     search_fields = ("home_club__name", "away_club__name", "venue")
-    date_hierarchy = "datetime"
-    autocomplete_fields = ("home_club", "away_club", "round")
-    change_list_template = "admin/matches/match_changelist.html"
+    ordering = ("datetime", "id")
+    inlines = [GoalInline, CardInline]
 
-@admin.register(Goal)
-class GoalAdmin(admin.ModelAdmin):
-    # 'player_name' -> remplace par 'player'
-    list_display = ("match", "club", "player", "minute")
-    list_filter = ("club",)
-    search_fields = ("player__first_name", "player__last_name", "club__name")
-
-@admin.register(Card)
-class CardAdmin(admin.ModelAdmin):
-    # 'player_name' -> 'player' ; 'card_type' -> 'type'
-    list_display = ("match", "club", "player", "type", "minute")
-    list_filter = ("type", "club")
-    search_fields = ("player__first_name", "player__last_name", "club__name")
 
 @admin.register(Round)
 class RoundAdmin(admin.ModelAdmin):
-    list_display = ("name",)
+    list_display = ("id", "name", "date")
     search_fields = ("name",)
+    ordering = ("id",)
+
+
+@admin.register(Goal)
+class GoalAdmin(admin.ModelAdmin):
+    list_display = ("id", "match", "club", "player", "minute")
+    list_filter = ("club", "match__round")
+    search_fields = ("player__name", "player__first_name", "player__last_name")
+    ordering = ("id",)
+
+
+@admin.register(Card)
+class CardAdmin(admin.ModelAdmin):
+    list_display = ("id", "match", "club", "player", "type", "minute")
+    list_filter = ("type", "club", "match__round")
+    search_fields = ("player__name", "player__first_name", "player__last_name")
+    ordering = ("id",)

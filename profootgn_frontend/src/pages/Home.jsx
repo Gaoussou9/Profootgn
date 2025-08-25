@@ -1,5 +1,5 @@
 // src/pages/Home.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
 
@@ -54,85 +54,142 @@ const statusLabel = (s) => {
 
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString() : "");
 
-/* ---------- Hook: minute LIVE persistante (0'… et plus) ---------- */
+/* ---------- Hook chrono LIVE: jamais de retour à 45' en 2e MT ---------- */
 /**
- * - Persiste un startAt par match dans localStorage pour lisser l’affichage client.
- * - On colle à la minute API au départ et on resynchronise si l’écart > 3'.
- * - Ne borne pas à 90 (pour pouvoir afficher 90’+).
+ * Clés localStorage:
+ *  - gn:live:<id>:anchor   = timestamp ms du point zéro (now - minute*60k)
+ *  - gn:live:<id>:best     = meilleure minute vue (anti-retour)
+ *  - gn:live:<id>:lastApi  = dernière minute API vue (anti-régression réseau)
+ *  - gn:live:<id>:half2    = "1" si 2e mi-temps
+ *  - gn:live:<id>:startSnapApplied = "1" si snap de démarrage (0–2’) appliqué
+ *
+ * Règles:
+ *  - 1re MT: 0'→45' puis 45’+ si l’API traîne
+ *  - 2e MT: 45',46',…→90’ puis 90’+ ; **jamais** de retour à 45’ après refresh
+ *  - On ne recale vers l’avant que si >3’ de retard. Jamais vers l’arrière (sauf snap de départ 0–2’).
  */
-function usePersistentLiveMinute(matchId, status, apiMinute) {
-  const isLive = (status || "").toUpperCase() === "LIVE";
-  const key = `gn:liveStartAt:${matchId}`;
-  const [tick, setTick] = useState(Date.now());
+function useLiveClock(matchId, status, apiMinute) {
+  const upper   = (status || "").toUpperCase();
+  const isLive  = upper === "LIVE";
+  const isBreak = upper === "HT" || upper === "PAUSED";
+
+  const base     = `gn:live:${matchId}`;
+  const kAnchor  = `${base}:anchor`;
+  const kBest    = `${base}:best`;
+  const kLastApi = `${base}:lastApi`;
+  const kHalf2   = `${base}:half2`;
+  const kStart   = `${base}:startSnapApplied`;
+
+  const [minute, setMinute] = useState(null);
+  const [isSecondHalf, setIsSecondHalf] = useState(false);
+  const timerRef = useRef(null);
+
+  const readNum = (k, d=null)=>{ try{const n=Number(localStorage.getItem(k));return Number.isFinite(n)?n:d;}catch{return d;}};
+  const readStr = (k)=>{ try{return localStorage.getItem(k);}catch{return null;} };
+  const write   = (k,v)=>{ try{localStorage.setItem(k,String(v));}catch{} };
+  const del     = (k)=>{ try{localStorage.removeItem(k);}catch{} };
 
   useEffect(() => {
-    if (!isLive) return;
-    const id = setInterval(() => setTick(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [isLive]);
-
-  useEffect(() => {
-    const upper = (status || "").toUpperCase();
-
-    if (upper !== "LIVE") {
-      if (upper === "FT" || upper === "FINISHED") {
-        try { localStorage.removeItem(key); } catch {}
-      }
+    // FT -> purge
+    if (upper === "FT" || upper === "FINISHED") {
+      [kAnchor,kBest,kLastApi,kHalf2,kStart].forEach(del);
+      setMinute(null);
+      setIsSecondHalf(false);
       return;
     }
-    const apiMinNum =
-      Number.isFinite(Number(apiMinute)) ? Math.max(0, Number(apiMinute)) : 0;
 
-    let stored = null;
-    try { stored = localStorage.getItem(key); } catch {}
-
-    if (!stored) {
-      const startAt = Date.now() - apiMinNum * 60000;
-      try { localStorage.setItem(key, String(startAt)); } catch {}
+    // Pause: on note la 2e MT et on borne best >= 45 (mais pas d’ancrage arrière)
+    if (isBreak) {
+      write(kHalf2,"1");
+      const best = readNum(kBest,0);
+      if ((best ?? 0) < 45) write(kBest,45);
+      setIsSecondHalf(true);
       return;
     }
-    const startAt = Number(stored);
-    if (Number.isFinite(startAt)) {
-      const fromLS = Math.max(0, Math.floor((Date.now() - startAt) / 60000));
-      if (Math.abs(fromLS - apiMinNum) > 3) {
-        const newStart = Date.now() - apiMinNum * 60000;
-        try { localStorage.setItem(key, String(newStart)); } catch {}
+
+    if (!isLive) { setMinute(null); return; }
+
+    const now = Date.now();
+
+    // Minute API normalisée + anti-régression API (>2')
+    let apiMin = parseInt(apiMinute,10);
+    if (!Number.isFinite(apiMin) || apiMin < 0) apiMin = 0;
+    const lastApi = readNum(kLastApi,-1);
+    if (Number.isFinite(lastApi) && apiMin < lastApi - 2) apiMin = lastApi;
+    if (apiMin > (lastApi ?? -1)) write(kLastApi, apiMin);
+
+    // Détecter 2e MT si on arrive en cours
+    if (!readStr(kHalf2) && apiMin >= 46) write(kHalf2,"1");
+    const h2 = readStr(kHalf2) === "1";
+    setIsSecondHalf(h2);
+
+    let anchor = readNum(kAnchor,null);
+    let best   = readNum(kBest,null);
+
+    // Si best manquant mais ancre présente, reconstruire best depuis l’affichage courant
+    if (!Number.isFinite(best) && Number.isFinite(anchor)) {
+      const displayed = Math.max(0, Math.floor((now - anchor)/60000));
+      best = displayed; write(kBest,best);
+    }
+    if (!Number.isFinite(best)) best = 0;
+
+    const placeAnchor = (m) => { const a = now - Math.max(0,m)*60000; write(kAnchor,a); return a; };
+
+    if (!Number.isFinite(anchor)) {
+      // première ancre: sur le meilleur connu (jamais en arrière)
+      anchor = placeAnchor(Math.max(apiMin, best));
+    } else {
+      const displayed = Math.max(0, Math.floor((now - anchor)/60000));
+
+      // Snap de début une seule fois (0–2’) si l’affichage local est trop en avance
+      if (readStr(kStart)!=="1" && apiMin<=2 && best<=2 && displayed>apiMin+2) {
+        anchor = placeAnchor(apiMin);
+        write(kStart,"1");
+      }
+
+      // ⚠️ AUCUN snap spécial 2e MT: on n’autorise plus de retour à 45’
+
+      // Rattrapage vers l’AVANT uniquement (jamais en arrière)
+      const candidate = Math.max(apiMin, best, displayed);
+      if (candidate - displayed > 3) {
+        anchor = placeAnchor(candidate);
       }
     }
-  }, [status, apiMinute, key]);
 
-  if (!isLive) return null;
+    // Ticker 1s
+    if (timerRef.current) clearInterval(timerRef.current);
+    const tick = () => {
+      const a = readNum(kAnchor,anchor);
+      let m = Math.max(0, Math.floor((Date.now() - a)/60000));
+      const hh2 = readStr(kHalf2) === "1";
+      if (hh2 && m < 45) m = 45;  // 2e MT ne descend jamais sous 45'
+      setMinute(m);
+      setIsSecondHalf(hh2);
+    };
+    tick();
+    timerRef.current = setInterval(tick, 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upper, isLive, isBreak, apiMinute, matchId]);
 
-  let startAt = null;
-  try { startAt = Number(localStorage.getItem(key)); } catch {}
-  let minute = 0;
-  if (Number.isFinite(startAt)) {
-    minute = Math.max(0, Math.floor((Date.now() - startAt) / 60000));
-  } else {
-    const apiMinNum =
-      Number.isFinite(Number(apiMinute)) ? Math.max(0, Number(apiMinute)) : 0;
-    const fallbackStart = Date.now() - apiMinNum * 60000;
-    try { localStorage.setItem(key, String(fallbackStart)); } catch {}
-    minute = apiMinNum;
-  }
-  return minute;
+  return { minute, isSecondHalf };
 }
 
-/** Format minute pour badge :
- * - LIVE + minute >= 90  -> "90’+"
- * - LIVE + minute >= 45  -> "45’+"
- * - LIVE sinon -> "X'"
- * - HT/PAUSED -> "HT"
+/** Badge minute
+ * - HT / PAUSED -> "HT"
+ * - LIVE:
+ *     · 1re MT: 0'…44' puis "45’+"
+ *     · 2e MT: 45'…89' puis "90’+"
  * - autres -> null
  */
-function formatMinuteForBadge(status, minute) {
+function formatMinuteForBadge(status, minute, isSecondHalf) {
   const upper = (status || "").toUpperCase();
   if (upper === "HT" || upper === "PAUSED") return "HT";
   if (upper !== "LIVE") return null;
-  const n = Number(minute ?? 0);
-  if (n >= 90) return "90’+";
-  if (n >= 45) return "45’+";
-  return `${n}'`;
+
+  const n = Math.max(0, Number(minute ?? 0));
+  if (isSecondHalf) return n >= 90 ? "90’+" : `${n}'`;
+  return n >= 45 ? "45’+" : `${n}'`;
 }
 
 /* ---------- Carte Match ---------- */
@@ -153,15 +210,15 @@ function MatchCard({ m }) {
   const awayLogo = m.away_club_logo || m.away_logo || m.away_club?.logo || null;
 
   // minute LIVE persistante côté client
-  const liveMinute = usePersistentLiveMinute(m.id, status, m.minute);
-  const minuteLabel = formatMinuteForBadge(status, liveMinute);
+  const { minute, isSecondHalf } = useLiveClock(m.id, status, m.minute);
+  const minuteLabel = formatMinuteForBadge(status, minute, isSecondHalf);
 
   return (
     <Link
       to={`/match/${m.id}`}
       className="relative block bg-white rounded-2xl shadow-sm ring-1 ring-gray-100 p-4 hover:shadow-md transition"
     >
-      {/* Badge statut + minute formatée */}
+      {/* Badge statut + minute */}
       <div
         className={`absolute right-3 top-3 text-xs px-2 py-1 rounded-full ring-1 ${statusClasses(
           status
@@ -173,6 +230,13 @@ function MatchCard({ m }) {
         {statusLabel(status)}
         {minuteLabel ? ` • ${minuteLabel}` : ""}
       </div>
+
+      {/* Badge Journée si dispo */}
+      {m.round_name ? (
+        <div className="absolute left-3 top-3 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 ring-1 ring-gray-200">
+          {m.round_name}
+        </div>
+      ) : null}
 
       {/* Grille compacte: [nom | logo | SCORE | logo | nom] */}
       <div className="grid grid-cols-[1fr,2rem,6rem,2rem,1fr] items-center gap-2 min-h-[68px]">
@@ -186,15 +250,13 @@ function MatchCard({ m }) {
           <Logo src={homeLogo} alt={homeName} />
         </div>
 
-        {/* Score centré (logique adaptée par statut) */}
+        {/* Score centré (logique par statut) */}
         <div className="w-[6rem] text-center">
           {isScheduled ? (
             <span className="text-gray-500 font-semibold">vs</span>
           ) : isPostponed ? (
-            // Reporté : pas de score
             <span className="text-gray-400 font-semibold">—</span>
           ) : (
-            // LIVE / FT / SUSPENDED / CANCELED...
             <span
               className={`text-xl font-extrabold leading-none tabular-nums ${
                 isSuspended || isCanceled ? "line-through text-gray-400" : ""
@@ -276,9 +338,7 @@ export default function Home() {
         if (!stop) setLoad(false);
       }
     })();
-    return () => {
-      stop = true;
-    };
+    return () => { stop = true; };
   }, []);
 
   // Rafraîchit les LIVE toutes les 15s
@@ -293,7 +353,7 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  // Rafraîchit les autres statuts toutes les 30s (suffisant)
+  // Rafraîchit les autres statuts toutes les 30s
   useEffect(() => {
     const id = setInterval(async () => {
       try {
@@ -320,13 +380,10 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  // Flux unique: LIVE -> HT/PAUSED (inclus dans live) -> SCHEDULED -> POSTPONED -> SUSPENDED -> CANCELED -> RECENT
+  // Flux unique: LIVE -> SCHEDULED -> POSTPONED -> SUSPENDED -> CANCELED -> RECENT
   const feed = useMemo(() => {
     const map = new Map();
-    const push = (list) =>
-      (list || []).forEach((m) => {
-        if (!map.has(m.id)) map.set(m.id, m);
-      });
+    const push = (list) => (list || []).forEach((m) => { if (!map.has(m.id)) map.set(m.id, m); });
     push(live);
     push(upcoming);
     push(postponed);
