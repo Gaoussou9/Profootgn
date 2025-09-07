@@ -1,24 +1,28 @@
-from rest_framework import viewsets, filters, permissions
+# clubs/views.py
+from rest_framework import viewsets, permissions
+from rest_framework.response import Response
 from .models import Club
 from .serializers import ClubSerializer
 
-class ReadOnlyOrAdmin(permissions.IsAdminUser):
-    """GET/HEAD/OPTIONS publics, écritures réservées admin."""
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return True
-        return super().has_permission(request, view)
-
 class ClubViewSet(viewsets.ModelViewSet):
+    """
+    API REST pour gérer les clubs.
+    - GET /api/clubs/ → liste
+    - POST /api/clubs/ → créer
+    - GET /api/clubs/{id}/ → détail
+    - PUT/PATCH /api/clubs/{id}/ → mise à jour
+    - DELETE /api/clubs/{id}/ → suppression
+    """
     queryset = Club.objects.all().order_by("name")
     serializer_class = ClubSerializer
-    permission_classes = [ReadOnlyOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
 
-    # Recherche & tri (adapte les champs à ceux qui existent dans ton modèle)
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name"]  # ajoute "city", "coach", etc. uniquement s'ils existent
-    ordering_fields = ["name", "id"]
-    ordering = ["name"]
-
-    # Pour le picker: renvoyer une liste (pas de pagination)
-    pagination_class = None
+    def get_queryset(self):
+        qs = super().get_queryset()
+        q = self.request.query_params.get("q")       # recherche texte
+        city = self.request.query_params.get("city") # filtre ville
+        if q:
+            qs = qs.filter(name__icontains=q)
+        if city:
+            qs = qs.filter(city__icontains=city)
+        return qs

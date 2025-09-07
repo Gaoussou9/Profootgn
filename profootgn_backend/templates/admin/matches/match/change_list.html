@@ -1,0 +1,14 @@
+{% extends "admin/change_list.html" %}
+{% load static %}
+
+{% block object-tools-items %}
+  {{ block.super }}
+  {# Optionnel: n'afficher le bouton que si l'utilisateur peut ajouter des matchs #}
+  {% if has_add_permission %}
+    <li>
+      <a class="button" href="{% url 'admin_quick_match' %}">
+        ➕ Ajouter (mode rapide)
+      </a>
+    </li>
+  {% endif %}
+{% endblock %}

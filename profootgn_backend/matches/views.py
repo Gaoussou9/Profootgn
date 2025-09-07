@@ -2,7 +2,7 @@
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_POST
@@ -14,6 +14,9 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAdminUser
 
+# ⬇️ Filtres DRF (optionnels mais utiles)
+from django_filters.rest_framework import DjangoFilterBackend
+
 from .models import Match, Goal, Card, Round
 from .serializers import (
     MatchSerializer,
@@ -24,6 +27,13 @@ from .serializers import (
 
 from players.models import Player
 from clubs.models import Club
+
+
+# -------------------------------------------------------
+# Utilitaires "related_name" dynamiques (goals/goal_set, etc.)
+# -------------------------------------------------------
+GOALS_REL_NAME = Goal._meta.get_field("match").remote_field.get_accessor_name()
+CARDS_REL_NAME = Card._meta.get_field("match").remote_field.get_accessor_name()
 
 
 # -----------------------
@@ -55,8 +65,15 @@ class MatchViewSet(viewsets.ModelViewSet):
     permission_classes = [ReadOnlyOrAdmin]
     serializer_class = MatchSerializer
 
-    # Recherche & tri
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    # Recherche & tri & filtres
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    # Ces champs restent utilisables tel quels si tu veux: ?round__number=1&status=FT
+    filterset_fields = {
+        "round_id": ["exact", "in"],
+        "round__name": ["iexact"],
+        "round__number": ["exact", "in"],
+        "status": ["exact", "in"],
+    }
     search_fields = ["home_club__name", "away_club__name", "venue"]
     ordering_fields = ["datetime", "minute", "id"]
     ordering = ["-datetime", "-id"]
@@ -66,32 +83,53 @@ class MatchViewSet(viewsets.ModelViewSet):
         Pré-charge relations et applique filtres query string:
           - status: FINISHED ⇔ FT, LIVE inclut aussi HT & PAUSED
           - date_from/date_to (YYYY-MM-DD) sur la date de 'datetime'
+          - round_number / round_id / round (nom) "friendly"
         """
+        qs_goals = Goal.objects.select_related("player", "club").order_by("minute", "id")
+        qs_cards = Card.objects.select_related("player", "club").order_by("minute", "id")
+
         qs = (
             Match.objects
             .select_related("home_club", "away_club", "round")
             .prefetch_related(
-                Prefetch(
-                    "goals",
-                    queryset=Goal.objects.select_related("player", "club").order_by("minute", "id"),
-                ),
-                Prefetch(
-                    "cards",
-                    queryset=Card.objects.select_related("player", "club").order_by("minute", "id"),
-                ),
+                Prefetch(GOALS_REL_NAME, queryset=qs_goals),
+                Prefetch(CARDS_REL_NAME, queryset=qs_cards),
             )
         )
 
-        status = self.request.query_params.get("status")
-        date_from = self.request.query_params.get("date_from")  # YYYY-MM-DD
-        date_to   = self.request.query_params.get("date_to")    # YYYY-MM-DD
+        # --------- Filtres "friendly" supplémentaires ---------
+        qp = self.request.query_params
+
+        # round_number (ex: ?round_number=5 ou ?round_number=5,6)
+        rn = qp.get("round_number")
+        if rn:
+            nums = [int(x) for x in str(rn).split(",") if x.strip().isdigit()]
+            if nums:
+                qs = qs.filter(round__number__in=nums)
+
+        # round_id (ex: ?round_id=12 ou 12,13)
+        rid = qp.get("round_id")
+        if rid:
+            ids = [int(x) for x in str(rid).split(",") if x.strip().isdigit()]
+            if ids:
+                qs = qs.filter(round_id__in=ids)
+
+        # round (nom) : ?round=J1
+        rname = qp.get("round")
+        if rname:
+            qs = qs.filter(round__name__iexact=str(rname).strip())
+
+        # --------- Status + dates ---------
+        status = qp.get("status")
+        date_from = qp.get("date_from")  # YYYY-MM-DD
+        date_to   = qp.get("date_to")    # YYYY-MM-DD
 
         if status:
             s = status.upper()
             if s == "FINISHED":
                 qs = qs.filter(status__in=["FT", "FINISHED"])
             elif s == "LIVE":
-                qs = qs.filter(status__in=["LIVE", "HT", "PAUSED"])  # inclure mi-temps & pause
+                qs = qs.filter(status__in=["LIVE", "HT", "PAUSED"])
             else:
                 qs = qs.filter(status=s)
 
@@ -135,7 +173,7 @@ class MatchViewSet(viewsets.ModelViewSet):
         """Matchs en cours (inclut la mi-temps et les pauses)."""
         qs = (
             self.get_queryset()
-            .filter(status__in=["LIVE", "HT", "PAUSED"])  # ← PAUSED inclus ici
+            .filter(status__in=["LIVE", "HT", "PAUSED"])
             .order_by("-datetime", "-id")
         )
         return Response(self.get_serializer(qs, many=True).data)
@@ -145,12 +183,21 @@ class GoalViewSet(viewsets.ModelViewSet):
     """
     Lecture publique, modifications réservées à l’admin.
     + POST /api/goals/bulk/ pour créer/mettre à jour les buts d'un match.
+    + GET  /api/goals/by-match/?match=<id> pour vérifier rapidement les buteurs d’un match.
     """
     authentication_classes = [SessionAuthentication, JWTAuthentication]
     permission_classes     = [ReadOnlyOrAdmin]
 
     queryset = Goal.objects.select_related("match", "player", "club")
     serializer_class = GoalSerializer
+
+    @action(detail=False, methods=["get"], url_path="by-match", permission_classes=[permissions.AllowAny])
+    def by_match(self, request):
+        mid = request.query_params.get("match")
+        if not mid:
+            return Response({"detail": "Paramètre 'match' requis."}, status=400)
+        qs = Goal.objects.filter(match_id=mid).select_related("player", "club").order_by("minute", "id")
+        return Response(GoalSerializer(qs, many=True, context={"request": request}).data)
 
     @action(detail=False, methods=["post"], url_path="bulk", permission_classes=[IsAdminUser])
     def bulk(self, request):
@@ -160,9 +207,12 @@ class GoalViewSet(viewsets.ModelViewSet):
           "match": 123,
           "replace": true,
           "goals": [
-            {"club": 1, "minute": 12, "player": 45},
-            {"club": 1, "minute": 54, "player_name": "Camara"},
-            {"club": 2, "minute": 77, "player_name": "Diallo"}
+            {
+              "club": 1,
+              "minute": 12,
+              "player": 45,                # ou "player_name": "Camara"
+              "assist_player": 67,         # (optionnel) ou "assist_name": "Diallo"
+            }
           ]
         }
         """
@@ -182,6 +232,7 @@ class GoalViewSet(viewsets.ModelViewSet):
 
             to_create = []
             for g in goals_in:
+                # club
                 club_id = g.get("club")
                 try:
                     club_id = int(club_id)
@@ -189,19 +240,19 @@ class GoalViewSet(viewsets.ModelViewSet):
                     continue
                 if club_id not in allowed_clubs:
                     continue
-
                 club = get_object_or_404(Club, pk=club_id)
 
+                # minute
                 minute = g.get("minute") or 0
                 try:
                     minute = int(minute)
                 except Exception:
                     minute = 0
 
+                # BUTEUR
                 player = None
                 player_id   = g.get("player")
                 player_name = (g.get("player_name") or "").strip()
-
                 if player_id:
                     player = get_object_or_404(Player, pk=player_id)
                 elif player_name:
@@ -217,7 +268,33 @@ class GoalViewSet(viewsets.ModelViewSet):
                     else:
                         player, _ = Player.objects.get_or_create(name=player_name)
 
-                to_create.append(Goal(match=match, club=club, player=player, minute=minute))
+                # PASSEUR (optionnel)
+                assist_player = None
+                assist_name   = (g.get("assist_name") or g.get("assist_player_name") or "").strip()
+                assist_id     = g.get("assist_player")
+                if assist_id:
+                    assist_player = get_object_or_404(Player, pk=assist_id)
+                elif assist_name:
+                    if hasattr(Player, "club"):
+                        assist_player = Player.objects.filter(name__iexact=assist_name, club=club).first()
+                        if not assist_player:
+                            assist_player, _ = Player.objects.get_or_create(
+                                name=assist_name, defaults={"club": club}
+                            )
+                        elif getattr(assist_player, "club_id", None) is None:
+                            assist_player.club = club
+                            assist_player.save(update_fields=["club"])
+                    else:
+                        assist_player = None
+
+                to_create.append(Goal(
+                    match=match,
+                    club=club,
+                    player=player,
+                    minute=minute,
+                    assist_player=assist_player if assist_player else None,
+                    assist_name=("" if assist_player else assist_name)
+                ))
 
             if to_create:
                 Goal.objects.bulk_create(to_create)
@@ -291,6 +368,7 @@ def _resolve_round(val):
 
 @require_POST
 def ajouter_match(request):  # /api/ajouter.py
+    # supporte home_id/away_id OU team1/team2 OU home/away
     home_val = _post(request, "home_id") or _post(request, "team1") or _post(request, "home")
     away_val = _post(request, "away_id") or _post(request, "team2") or _post(request, "away")
 
@@ -381,20 +459,23 @@ def suspendre_match(request):  # /api/suspendre.py
 
 
 # -------------------------------------------------------
-# Classement provisoire (logos inclus)
+# Classement provisoire (logos inclus) – robuste + debug
 # -------------------------------------------------------
 @api_view(["GET"])
 @permission_classes([permissions.AllowAny])
 def standings_view(request):
     """
-    GET /api/stats/standings/?include_live=1
+    GET /api/stats/standings/?include_live=1&debug=1
     - FT/FINISHED toujours comptés
     - + LIVE/HT/PAUSED si include_live=1 (classement qui bouge pendant le match)
+    - Fallback: si include_live=0 et aucun FT/FINISHED, on inclut LIVE/HT/PAUSED quand même.
+    - debug=1 => renvoie {"debug": {...}, "table": [...]}
     """
-    include_live = str(request.query_params.get("include_live", "0")).lower() in {"1", "true", "yes", "on"}
-    finished = ["FT", "FINISHED"]
-    liveish  = ["LIVE", "HT", "PAUSED"]
-    statuses = finished + (liveish if include_live else [])
+    include_live = str(request.query_params.get("include_live", "1")).lower() in {"1", "true", "yes", "on"}
+    debug_flag   = str(request.query_params.get("debug", "0")).lower() in {"1", "true", "yes", "on"}
+
+    finished = ("FT", "FINISHED")
+    liveish  = ("LIVE", "HT", "PAUSED")
 
     def _abs_logo(club):
         if not club or not getattr(club, "logo", None):
@@ -413,6 +494,8 @@ def standings_view(request):
             "goals_for": 0, "goals_against": 0, "goal_diff": 0, "points": 0,
         }
 
+    # 1er passage : selon include_live
+    statuses = finished + (liveish if include_live else ())
     qs = (
         Match.objects
         .filter(status__in=statuses)
@@ -420,6 +503,17 @@ def standings_view(request):
         .order_by("datetime", "id")
     )
 
+    # Fallback s'il n'y a aucun terminé et que include_live=0
+    if not qs.exists() and not include_live:
+        statuses = finished + liveish
+        qs = (
+            Match.objects
+            .filter(status__in=statuses)
+            .select_related("home_club", "away_club")
+            .order_by("datetime", "id")
+        )
+
+    counted = 0
     for m in qs:
         if not m.home_club_id or not m.away_club_id:
             continue
@@ -442,6 +536,8 @@ def standings_view(request):
             rows[h]["draws"] += 1; rows[a]["draws"] += 1
             rows[h]["points"] += 1; rows[a]["points"] += 1
 
+        counted += 1
+
     out = []
     for r in rows.values():
         r["goal_diff"] = r["goals_for"] - r["goals_against"]
@@ -449,4 +545,63 @@ def standings_view(request):
 
     # Tri standard: Pts, Diff, BM, puis nom
     out.sort(key=lambda x: (-x["points"], -x["goal_diff"], -x["goals_for"], x["club_name"].lower()))
+
+    if debug_flag:
+        return Response({
+            "debug": {
+                "statuses_used": list(statuses),
+                "matches_counted": counted,
+                "include_live": include_live,
+            },
+            "table": out,
+        })
+    return Response(out)
+
+
+# -------------------------------------------------------
+# Recherche joueurs (auto-complétion)
+# -------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([permissions.AllowAny])
+def search_players(request):
+    """
+    GET /api/players/search/?club=<id>&q=<texte>&limit=20
+    Retour: [{id, name, club_id, club_name}]
+    """
+    q = (request.query_params.get("q") or "").strip()
+    club_id = request.query_params.get("club")
+    try:
+        limit = int(request.query_params.get("limit") or 20)
+    except Exception:
+        limit = 20
+
+    qs = Player.objects.all()
+
+    # Filtre par club si Player a une FK club
+    if club_id and str(club_id).isdigit() and hasattr(Player, "club"):
+        qs = qs.filter(club_id=int(club_id))
+
+    if q:
+        filt = Q()
+        if hasattr(Player, "name"):
+            filt |= Q(name__icontains=q)
+        if hasattr(Player, "first_name"):
+            filt |= Q(first_name__icontains=q)
+        if hasattr(Player, "last_name"):
+            filt |= Q(last_name__icontains=q)
+        if filt:
+            qs = qs.filter(filt)
+
+    qs = qs.select_related("club")[:limit]
+
+    out = []
+    for p in qs:
+        club = getattr(p, "club", None)
+        name = getattr(p, "name", None) or f"{getattr(p,'first_name','')} {getattr(p,'last_name','')}".strip() or f"Joueur #{p.pk}"
+        out.append({
+            "id": p.id,
+            "name": name,
+            "club_id": getattr(club, "id", None),
+            "club_name": getattr(club, "name", None),
+        })
     return Response(out)

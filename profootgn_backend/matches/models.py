@@ -4,22 +4,39 @@ from django.core.exceptions import ValidationError
 from clubs.models import Club
 from players.models import Player
 
+# Statuts élargis pour correspondre à l'admin / front
 MATCH_STATUS = [
-    ('SCHEDULED', 'Scheduled'),
-    ('LIVE', 'Live'),
-    ('FINISHED', 'Finished'),
-    ('SUSPENDED', 'Suspended'),  # ajouté
+    ("SCHEDULED", "Scheduled"),
+    ("LIVE", "Live"),
+    ("HT", "Half-time"),
+    ("PAUSED", "Paused"),
+    ("FT", "Full-time"),
+    ("FINISHED", "Finished"),
+    ("SUSPENDED", "Suspended"),
+    ("POSTPONED", "Postponed"),
+    ("CANCELED", "Canceled"),
 ]
 
+
 class Round(models.Model):
-    name = models.CharField(max_length=50)  # e.g., "Journée 1"
+    # ✅ Nouveau : numéro de journée (J1..J26), indexé et triable
+    name = models.CharField(max_length=50)  # ex. "Journée 1" ou "J1"
     date = models.DateField(null=True, blank=True)
+    number = models.PositiveIntegerField(null=True, blank=True, unique=True)
 
     class Meta:
-        ordering = ['id']
+        # Trie d'abord par number, puis par id (pour les rounds sans number)
+        ordering = ["number", "id"]
+
+    @property
+    def display_name(self):
+        # Affichage court "J<n>" si possible
+        if self.number:
+            return f"J{self.number}"
+        return self.name or f"J?{self.pk}"
 
     def __str__(self):
-        return self.name
+        return self.display_name
 
 
 class Match(models.Model):
@@ -91,11 +108,19 @@ class Match(models.Model):
         return f"{self.home_club} vs {self.away_club}"
 
 
+# matches/models.py (complément)
 class Goal(models.Model):
     match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name='goals')
     player = models.ForeignKey(Player, on_delete=models.SET_NULL, null=True, blank=True)
-    club = models.ForeignKey(Club, on_delete=models.CASCADE)
+    club   = models.ForeignKey(Club, on_delete=models.CASCADE)
     minute = models.PositiveIntegerField()
+
+    # ✅ Assist
+    assist_player = models.ForeignKey(
+        Player, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='assists'
+    )
+    assist_name = models.CharField(max_length=120, blank=True, default="")
 
     def __str__(self):
         return f"{self.player} {self.minute}'"

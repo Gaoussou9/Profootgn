@@ -14,7 +14,7 @@ class Player(models.Model):
     last_name = models.CharField(max_length=80)
     club = models.ForeignKey(Club, on_delete=models.SET_NULL, null=True, related_name='players')
     number = models.PositiveIntegerField(default=0)
-    position = models.CharField(max_length=2, choices=POSITIONS)
+    position = models.CharField(max_length=64, blank=True, null=True) 
     nationality = models.CharField(max_length=60, blank=True)
     birthdate = models.DateField(null=True, blank=True)
     photo = models.ImageField(upload_to='players/', blank=True, null=True)

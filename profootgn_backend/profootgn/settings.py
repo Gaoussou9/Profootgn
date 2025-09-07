@@ -5,8 +5,6 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-
-
 SECRET_KEY = os.getenv('SECRET_KEY', 'change-me-in-production')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
@@ -23,6 +21,7 @@ INSTALLED_APPS = [
     # 3rd party
     'rest_framework',
     'corsheaders',
+    'django_filters',           # ← ajouté pour django-filter
     # local apps
     'clubs',
     'players',
@@ -69,16 +68,12 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.getenv('DB_NAME', 'profootgn_db'),
         'USER': os.getenv('DB_USER', 'Admin'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'Admin'), 
+        'PASSWORD': os.getenv('DB_PASSWORD', 'Admin'),
         'HOST': os.getenv('DB_HOST', '127.0.0.1'),
         'PORT': os.getenv('DB_PORT', '3306'),
         'OPTIONS': {'charset': 'utf8mb4'},
     }
 }
-
-
-    
-
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME':'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -93,6 +88,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
+STATICFILES_DIRS = []
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
@@ -103,13 +99,18 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 25,
+    # ← ajoute le backend de filtres + ordering DRF
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        "rest_framework.filters.SearchFilter",
+        'rest_framework.filters.OrderingFilter',
+    ],
 }
 
 # CORS
 CORS_ALLOW_ALL_ORIGINS = False
 origins = os.getenv('ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
 CORS_ALLOWED_ORIGINS = [o.strip() for o in origins.split(',') if o.strip()]
-
 
 from datetime import timedelta
 SIMPLE_JWT = {
@@ -124,9 +125,6 @@ REST_FRAMEWORK.update({
     ),
 })
 
-
-
-
 JAZZMIN_SETTINGS = {
     "site_title": "Administration de Django",
     "site_header": "Administration de Django",
@@ -134,7 +132,6 @@ JAZZMIN_SETTINGS = {
     "welcome_sign": "Tableau de bord",
     "copyright": "LiveFootGn",
 
-    # Menu du haut (liens rapides)
     "topmenu_links": [
         {"name": "Accueil", "url": "admin:index", "permissions": ["auth.view_user"]},
         {"app": "players"},
@@ -142,16 +139,13 @@ JAZZMIN_SETTINGS = {
         {"app": "matches"},
         {"app": "recruitment"},
         {"app": "users"},
-        # lien vers ta page admin custom (voir §4)
         {"name": "Espace Admin LiveFootGn", "url": "admin_livefootgn"},
     ],
 
-    # Ordre des apps et des modèles (colonne centrale, cartes)
     "order_with_respect_to": [
         "auth", "players", "clubs", "matches", "stats", "news", "recruitment", "users"
     ],
 
-    # Icônes (gauche + cartes) — FontAwesome (fa)
     "icons": {
         "auth": "fas fa-shield-alt",
         "auth.Group": "fas fa-users-cog",
@@ -174,7 +168,6 @@ JAZZMIN_SETTINGS = {
         "users.Profile": "fas fa-id-card",
     },
 
-    # Colonne droite "Actions récentes" (timeline)
     "show_ui_builder": False,
     "changeform_format": "horizontal_tabs",
     "related_modal_active": True,
@@ -182,7 +175,7 @@ JAZZMIN_SETTINGS = {
 }
 
 JAZZMIN_UI_TWEAKS = {
-    "theme": "flatly",              # look propre
+    "theme": "flatly",
     "dark_mode_theme": None,
     "navbar": "navbar-white navbar-light",
     "sidebar": "sidebar-dark-primary",

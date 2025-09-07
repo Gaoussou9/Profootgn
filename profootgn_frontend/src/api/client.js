@@ -1,23 +1,56 @@
 // src/api/client.js
-import axios from 'axios';
+import axios from "axios";
 
-const base = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
+const base = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
-// baseURL garanti avec un slash final
+// Toujours finir par /api/
+const baseURL = base.replace(/\/+$/, "") + "/api/";
+
 const api = axios.create({
-  baseURL: base.replace(/\/+$/, '') + '/api/',
+  baseURL,
   timeout: 15000,
+  // Si tu utilises des cookies/CSRF côté Django, active ceci :
+  // withCredentials: true,
 });
 
-// Interceptor: 1) force des URLs relatives (retire les "/" de tête)
-//              2) ajoute le Bearer token si présent
+// ----- Request interceptor -----
+// - supprime les slashes de tête sur config.url (pour éviter //)
+// - ajoute le Bearer token si présent
+// - force Accept / Content-Type en JSON
 api.interceptors.request.use((config) => {
   if (config.url) {
-    config.url = config.url.replace(/^\/+/, ''); // '/matches/...' -> 'matches/...'
+    // '/matches/...' -> 'matches/...'
+    config.url = config.url.replace(/^\/+/, "");
   }
-  const t = localStorage.getItem('token');
+  config.headers = {
+    ...(config.headers || {}),
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  const t = localStorage.getItem("token");
   if (t) config.headers.Authorization = `Bearer ${t}`;
   return config;
 });
+
+// ----- Response interceptor -----
+// (optionnel) normalise les erreurs pour un message lisible
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    const msg =
+      err?.response?.data?.detail ||
+      err?.response?.data?.message ||
+      err?.message ||
+      "Erreur réseau";
+    // Tu peux logger si besoin :
+    // console.warn("API error:", msg, err?.response);
+    return Promise.reject(new Error(msg));
+  }
+);
+
+// Petit helper pratique pour tes pages React :
+// Récupère toujours un tableau, que la réponse DRF soit paginée ou non.
+export const getArr = (res) =>
+  Array.isArray(res?.data) ? res.data : res?.data?.results || [];
 
 export default api;

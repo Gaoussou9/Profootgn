@@ -1,0 +1,490 @@
+{# templates/admin/events/quick_events.html #}
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{# 🔹 styles partagés des pages rapides #}
+{% block extrastyle %}
+  {% include "includes/admin_quick_head.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="aq-container">
+
+  {# 🔹 barre d’onglets communes (match / events / players / clubs) #}
+  {% include "includes/admin_quick_toolbar.html" with active="events" title="Événements rapides (buts & cartons)" %}
+
+  {% if messages %}
+    <ul class="messagelist">
+      {% for m in messages %}
+        <li class="{{ m.tags }}">{{ m }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <form method="post" action="{% url 'admin_quick_events' %}" class="aq-form vstack" style="gap:16px; max-width:1000px;">
+    {% csrf_token %}
+
+    <!-- Sélection du match -->
+    <div>
+      <label class="aq-label"><strong>Match</strong></label>
+      <select id="matchSelect" name="match_id" required class="form-select">
+        <option value="">-- Sélectionne un match --</option>
+        {% for m in matches %}
+          <option
+            value="{{ m.id }}"
+            data-home-id="{{ m.home_club.id }}"
+            data-away-id="{{ m.away_club.id }}"
+            data-home-name="{{ m.home_club.name }}"
+            data-away-name="{{ m.away_club.name }}"
+          >
+            #{{ m.id }} — {% if m.round %}{{ m.round.name }}{% else %}-{% endif %} — {{ m.home_club.name }} vs {{ m.away_club.name }}
+            ({{ m.datetime|date:"Y-m-d H:i" }}) [{{ m.status }} {% if m.minute %}{{ m.minute }}'{% else %}0'{% endif %}]
+          </option>
+        {% endfor %}
+      </select>
+      <div id="teamsHint" class="aq-hint"></div>
+    </div>
+
+    <!-- Sélection du club (restreint aux 2 équipes via JS) -->
+    <div>
+      <label class="aq-label"><strong>Club concerné</strong> (équipe qui marque / reçoit le carton)</label>
+      <select id="clubSelect" name="club_id" required class="form-select">
+        <option value="">-- Sélectionne un club --</option>
+        {% for c in clubs %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="aq-hint">Une fois le club choisi, la liste des joueurs ci-dessous se remplit.</div>
+    </div>
+
+    <!-- Grille 2 colonnes : Buts & Cartons -->
+    <div class="aq-grid-2">
+      <!-- BUTS -->
+      <div>
+        <div class="aq-section-head">
+          <label class="aq-label"><strong>Buts</strong> (1 ligne = 1 but)</label>
+        </div>
+
+        {# 🔹 Mini-formulaire intelligent pour ajouter un but #}
+        <div class="aq-inline">
+          <select id="goalPlayerSelect" class="form-select" disabled>
+            <option value="">— Buteur —</option>
+          </select>
+          <input id="goalMinute" class="form-control" placeholder="Minute (ex: 12 ou 90+2)" />
+          <select id="assistSelect" class="form-select" disabled>
+            <option value="">— Passeur (optionnel) —</option>
+          </select>
+          <select id="goalType" class="form-select">
+            <option value="">Type</option>
+            <option value="pen">pen</option>
+            <option value="csc">csc</option>
+          </select>
+          <button type="button" class="button" id="btnAppendGoal">Ajouter</button>
+        </div>
+
+        <textarea id="goalsText" name="goals_text" rows="12" placeholder="Exemples :
+John Doe 12'
+John Doe 12' (Assist)
+#9 45+2 pen
+Traoré 37' csc"></textarea>
+        <small class="aq-hint">
+          Formats : <code>John Doe 12'</code> — <code>John Doe 12' (Assist)</code> — <code>#9 45+2 pen</code> — <code>Traoré 37' csc</code>.
+          Minute peut être <code>12</code>, <code>12'</code>, <code>90+3</code>. Utilise <strong>pen/p/pk</strong> pour pénalty, <strong>csc/og</strong> pour c.s.c.
+        </small>
+      </div>
+
+      <!-- CARTONS -->
+      <div>
+        <div class="aq-section-head">
+          <label class="aq-label"><strong>Cartons</strong> (1 ligne = 1 carton)</label>
+        </div>
+
+        {# 🔹 Mini-formulaire intelligent pour ajouter un carton #}
+        <div class="aq-inline">
+          <select id="cardPlayerSelect" class="form-select" disabled>
+            <option value="">— Joueur —</option>
+          </select>
+          <input id="cardMinute" class="form-control" placeholder="Minute (ex: 17 ou 45+2)" />
+          <select id="cardColor" class="form-select">
+            <option value="Y">Jaune</option>
+            <option value="R">Rouge</option>
+          </select>
+          <button type="button" class="button" id="btnAppendCard">Ajouter</button>
+        </div>
+
+        <textarea id="cardsText" name="cards_text" rows="12" placeholder="Exemples :
+John Doe 17' Y
+23 52' R
+#5 90+2 Y"></textarea>
+        <small class="aq-hint">
+          Couleurs : <code>Y</code>=Jaune, <code>R</code>=Rouge. Ex. <code>John Doe 17' Y</code>, <code>23 52' R</code>.
+        </small>
+      </div>
+    </div>
+
+    <!-- Soumission -->
+    <div class="submit-row" style="margin-top:8px;">
+      <input type="submit" value="Enregistrer" class="default">
+    </div>
+  </form>
+
+  <hr/>
+
+  <h2 class="aq-headline">Éditer les événements du match</h2>
+  <p class="help">Choisis un match ci-dessus : la liste s’affiche ci-dessous. Tu peux modifier minute, joueur, passeur, couleur — <strong>cocher Pen./CSC</strong> — et téléverser une photo pour le joueur.</p>
+
+  <div id="eventsWrap" style="display:none; gap:16px;">
+    <div style="flex:1;">
+      <h3>Buts</h3>
+      <table class="grp-table" id="goalsTable">
+        <thead><tr>
+          <th>#</th><th>Club</th><th>Minute</th><th>Joueur</th><th>Passeur</th><th>Type</th><th>Photo</th><th>Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div style="flex:1; margin-top:24px;">
+      <h3>Cartons</h3>
+      <table class="grp-table" id="cardsTable">
+        <thead><tr>
+          <th>#</th><th>Club</th><th>Minute</th><th>Joueur</th><th>Couleur</th><th>Photo</th><th>Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <style>
+    .aq-grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    @media (max-width: 900px){ .aq-grid-2{ grid-template-columns:1fr; } }
+    .aq-inline{ display:grid; grid-template-columns: 1.2fr .9fr 1.2fr .7fr .6fr; gap:8px; align-items:center; margin:8px 0 10px; }
+    @media (max-width: 900px){
+      .aq-inline{ grid-template-columns: 1fr 1fr; grid-auto-rows:auto; }
+      .aq-inline .button{ grid-column: span 2; }
+    }
+    .aq-section-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px; }
+    .aq-label{ display:block; margin-bottom:6px; }
+    .aq-hint{ margin-top:6px; font-size:12px; opacity:.8; }
+    textarea, select, input[type="text"] { width:100%; }
+    .button { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#f7f7f8; cursor:pointer; }
+    .button:hover { background:#eeeeef; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#f0f0f0; font-size:12px; margin-right:6px; }
+    .mini-photo img { vertical-align:middle; }
+    .grp-table { width:100%; border-collapse: collapse; }
+    .grp-table th, .grp-table td { padding:6px 8px; border-top:1px solid #eee; }
+    .grp-table thead th { background:#fafafa; }
+  </style>
+
+  <script>
+  (function() {
+    const matchSelect = document.getElementById('matchSelect');
+    const clubSelect  = document.getElementById('clubSelect');
+    const teamsHint   = document.getElementById('teamsHint');
+
+    const goalsTbody = document.querySelector("#goalsTable tbody");
+    const cardsTbody = document.querySelector("#cardsTable tbody");
+    const wrap = document.getElementById("eventsWrap");
+
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+    // —— refs mini-form —— 
+    const goalPlayerSelect = document.getElementById('goalPlayerSelect');
+    const assistSelect     = document.getElementById('assistSelect');
+    const goalMinuteInput  = document.getElementById('goalMinute');
+    const goalTypeSelect   = document.getElementById('goalType');
+    const btnAppendGoal    = document.getElementById('btnAppendGoal');
+
+    const cardPlayerSelect = document.getElementById('cardPlayerSelect');
+    const cardMinuteInput  = document.getElementById('cardMinute');
+    const cardColorSelect  = document.getElementById('cardColor');
+    const btnAppendCard    = document.getElementById('btnAppendCard');
+
+    const goalsText  = document.getElementById('goalsText');
+    const cardsText  = document.getElementById('cardsText');
+
+    // ——— helpers ———
+    function appendLine(textarea, line) {
+      if (!line) return;
+      if (textarea.value && !textarea.value.endsWith('\n')) textarea.value += '\n';
+      textarea.value += line;
+      textarea.focus();
+    }
+    function opt(value, label){
+      const o = document.createElement('option'); o.value=value; o.textContent=label; return o;
+    }
+    function fullName(p){
+      if (p.name && p.name.trim()) return p.name;
+      const a = (p.first_name||'').trim(), b = (p.last_name||'').trim();
+      return (a + ' ' + b).trim() || ('Joueur #' + p.id);
+    }
+    function decorate(p){
+      const nm = fullName(p);
+      return (p.number!=null && p.number!=='') ? `#${p.number} — ${nm}` : nm;
+    }
+    async function fetchJSON(url){
+      try{ const r = await fetch(url); return await r.json(); }catch{ return []; }
+    }
+
+    async function loadClubPlayers(clubId){
+      goalPlayerSelect.innerHTML = ''; assistSelect.innerHTML = ''; cardPlayerSelect.innerHTML = '';
+      goalPlayerSelect.appendChild(opt('', '— Buteur —'));
+      assistSelect.appendChild(opt('', '— Passeur (optionnel) —'));
+      cardPlayerSelect.appendChild(opt('', '— Joueur —'));
+      goalPlayerSelect.disabled = assistSelect.disabled = cardPlayerSelect.disabled = true;
+      if(!clubId) return;
+
+      const data = await fetchJSON(`/api/players/?club=${encodeURIComponent(clubId)}&page_size=500`);
+      const arr  = Array.isArray(data) ? data : (data.results || []);
+      arr.sort((a,b)=>{
+        const na = (a.number==null? 9999 : a.number), nb = (b.number==null? 9999 : b.number);
+        if (na !== nb) return na - nb;
+        return fullName(a).localeCompare(fullName(b));
+      });
+      for (const p of arr){
+        const label = decorate(p);
+        const value = fullName(p); // on injecte le nom lisible dans la textarea
+        goalPlayerSelect.appendChild(opt(value, label));
+        assistSelect.appendChild(opt(value, label));
+        cardPlayerSelect.appendChild(opt(value, label));
+      }
+      goalPlayerSelect.disabled = assistSelect.disabled = cardPlayerSelect.disabled = false;
+    }
+
+    // —— club filtré aux 2 équipes du match —— 
+    const allClubOptions = Array.from(clubSelect.querySelectorAll('option')).map(opt => ({ value: opt.value, text: opt.textContent }));
+
+    function setClubOptions(homeId, awayId, homeName, awayName) {
+      clubSelect.innerHTML = '';
+      clubSelect.appendChild(opt('', '-- Sélectionne un club --'));
+      clubSelect.appendChild(opt(homeId, homeName + ' (Home)'));
+      clubSelect.appendChild(opt(awayId, awayName + ' (Away)'));
+      teamsHint.innerHTML = '<span class="pill">Home: ' + homeName + '</span>' + '<span class="pill">Away: ' + awayName + '</span>';
+      loadClubPlayers('');
+    }
+
+    function onMatchChange() {
+      const optEl = matchSelect.options[matchSelect.selectedIndex];
+      if (!optEl || !optEl.dataset.homeId || !optEl.dataset.awayId) {
+        clubSelect.innerHTML = '';
+        clubSelect.appendChild(opt('', '-- Sélectionne un club --'));
+        allClubOptions.forEach(o => clubSelect.appendChild(opt(o.value, o.text)));
+        teamsHint.textContent = '';
+        wrap.style.display = "none";
+        goalsTbody.innerHTML = "";
+        cardsTbody.innerHTML = "";
+        loadClubPlayers('');
+        return;
+      }
+      setClubOptions(optEl.dataset.homeId, optEl.dataset.awayId, optEl.dataset.homeName, optEl.dataset.awayName);
+      loadList();
+    }
+
+    // —— Persistance locale (résout le “après POST la sélection disparaît”) —— 
+    const LS_MATCH_KEY = 'quick_events_match';
+    const LS_CLUB_KEY  = 'quick_events_club';
+
+    function saveSelection(){
+      localStorage.setItem(LS_MATCH_KEY, matchSelect.value || '');
+      localStorage.setItem(LS_CLUB_KEY,  clubSelect.value  || '');
+    }
+
+    function restoreSelection(){
+      const mid = localStorage.getItem(LS_MATCH_KEY) || '';
+      if (mid) {
+        // si l’option existe, on la sélectionne
+        const opt = Array.from(matchSelect.options).find(o => o.value === mid);
+        if (opt) { matchSelect.value = mid; onMatchChange(); }
+      }
+      const cid = localStorage.getItem(LS_CLUB_KEY) || '';
+      if (cid) {
+        // on n’applique le club qu’après avoir peuplé les 2 équipes
+        const applyClub = () => {
+          const has = Array.from(clubSelect.options).some(o => o.value === cid);
+          if (has) { clubSelect.value = cid; loadClubPlayers(cid); }
+        };
+        // petit délai pour laisser setClubOptions reconstruire le select
+        setTimeout(applyClub, 0);
+      }
+    }
+
+    matchSelect.addEventListener('change', ()=>{ onMatchChange(); saveSelection(); });
+    clubSelect.addEventListener('change', ()=>{ loadClubPlayers(clubSelect.value || ''); saveSelection(); });
+
+    // —— boutons “Ajouter” —— 
+    btnAppendGoal.addEventListener('click', ()=>{
+      const who = (goalPlayerSelect.value || '').trim();
+      if(!who){ alert('Choisis un buteur'); return; }
+      const minute = (goalMinuteInput.value || '0').trim();
+      const assist = (assistSelect.value || '').trim();
+      const tag    = (goalTypeSelect.value || '').trim();
+      const suffix = tag ? (' ' + tag) : '';
+      const line = assist ? `${who} ${minute} (${assist})${suffix}` : `${who} ${minute}${suffix}`;
+      appendLine(goalsText, line);
+      goalMinuteInput.value = ''; goalTypeSelect.value = '';
+    });
+
+    btnAppendCard.addEventListener('click', ()=>{
+      const who = (cardPlayerSelect.value || '').trim();
+      if(!who){ alert('Choisis un joueur'); return; }
+      const minute = (cardMinuteInput.value || '0').trim();
+      const color  = cardColorSelect.value || 'Y';
+      const line = `${who} ${minute} ${color}`;
+      appendLine(cardsText, line);
+      cardMinuteInput.value = '';
+    });
+
+    // —— API CRUD table (inchangé côté backend) —— 
+    async function api(action, payload, isMultipart){
+      const url = "{% url 'admin_quick_events_api' %}";
+      if(isMultipart){
+        payload.append("action", action);
+        const res = await fetch(url, { method:"POST", body: payload, headers: {"X-CSRFToken": csrf } });
+        return await res.json();
+      }
+      const body = new URLSearchParams({action, ...payload});
+      const res = await fetch(url, {
+        method:"POST",
+        headers: {"X-CSRFToken": csrf, "Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},
+        body
+      });
+      return await res.json();
+    }
+
+    function badgePhoto(src){
+      const url = src || "/static/admin/img/icon-unknown.svg";
+      return `<img src="${url}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid #e5e7eb" onerror="this.src='/static/admin/img/icon-unknown.svg'"/>`;
+    }
+
+    function rowGoal(i, g){
+      const pen = g.is_penalty ? 'checked' : '';
+      const og  = g.is_own_goal ? 'checked' : '';
+      return `<tr data-id="${g.id}">
+        <td>${i}</td>
+        <td>${g.club_name}</td>
+        <td><input type="number" min="0" value="${g.minute||0}" class="vTextField" style="width:70px" data-f="minute"/></td>
+        <td><input type="text" value="${g.player_name||""}" class="vTextField" style="width:180px" placeholder="#9, id:42 ou Nom" data-f="player_token"/></td>
+        <td><input type="text" value="${g.assist_name||""}" class="vTextField" style="width:160px" placeholder="#10, id:77 ou Nom" data-f="assist_token"/></td>
+        <td>
+          <label style="margin-right:8px;"><input type="checkbox" data-f="is_penalty" ${pen}/> Pen.</label>
+          <label><input type="checkbox" data-f="is_own_goal" ${og}/> CSC</label>
+        </td>
+        <td>
+          <label class="button" style="margin:0;">Choisir
+            <input type="file" accept="image/*" style="display:none" data-player="${g.player_id||''}" data-kind="goal"/>
+          </label>
+          <span class="mini-photo">${badgePhoto(g.player_photo)}</span>
+        </td>
+        <td>
+          <button class="button default" data-action="save-goal">Enregistrer</button>
+          <button class="button" data-action="del-goal">Supprimer</button>
+        </td>
+      </tr>`;
+    }
+
+    function rowCard(i, c){
+      const color = (c.color||"").toString().toUpperCase();
+      const optHtml = (v,l)=>`<option value="${v}" ${color===v?'selected':''}>${l}</option>`;
+      return `<tr data-id="${c.id}">
+        <td>${i}</td>
+        <td>${c.club_name}</td>
+        <td><input type="number" min="0" value="${c.minute||0}" class="vTextField" style="width:70px" data-f="minute"/></td>
+        <td><input type="text" value="${c.player_name||""}" class="vTextField" style="width:180px" placeholder="#4, id:12 ou Nom" data-f="player_token"/></td>
+        <td>
+          <select class="vTextField" data-f="color" style="width:120px">
+            ${optHtml('Y','Jaune')} ${optHtml('R','Rouge')}
+          </select>
+        </td>
+        <td>
+          <label class="button" style="margin:0;">Choisir
+            <input type="file" accept="image/*" style="display:none" data-player="${c.player_id||''}" data-kind="card"/>
+          </label>
+          <span class="mini-photo">${badgePhoto(c.player_photo)}</span>
+        </td>
+        <td>
+          <button class="button default" data-action="save-card">Enregistrer</button>
+          <button class="button" data-action="del-card">Supprimer</button>
+        </td>
+      </tr>`;
+    }
+
+    async function loadList(){
+      const mid = matchSelect.value;
+      if(!mid){ wrap.style.display="none"; goalsTbody.innerHTML=""; cardsTbody.innerHTML=""; return; }
+      const url = "{% url 'admin_quick_events_api' %}" + `?action=list&match_id=${mid}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      goalsTbody.innerHTML = (data.goals||[]).map((g,i)=>rowGoal(i+1,g)).join("");
+      cardsTbody.innerHTML = (data.cards||[]).map((c,i)=>rowCard(i+1,c)).join("");
+      wrap.style.display = "block";
+    }
+
+    document.addEventListener("click", async (e)=>{
+      const btn = e.target.closest("button");
+      if(!btn) return;
+      const tr = e.target.closest("tr");
+
+      if(btn.dataset.action==="save-goal"){
+        const payload = {
+          id: tr.dataset.id,
+          minute: tr.querySelector('[data-f="minute"]').value,
+          player_token: tr.querySelector('[data-f="player_token"]').value,
+          assist_token: tr.querySelector('[data-f="assist_token"]').value,
+          is_penalty: tr.querySelector('[data-f="is_penalty"]').checked ? "1" : "0",
+          is_own_goal: tr.querySelector('[data-f="is_own_goal"]').checked ? "1" : "0",
+        };
+        const r = await api("update_goal", payload);
+        if(r.ok){ await loadList(); }
+      }
+
+      if(btn.dataset.action==="del-goal"){
+        if(confirm("Supprimer ce but ?")){
+          const r = await api("delete_goal", {id: tr.dataset.id});
+          if(r.ok){ tr.remove(); }
+        }
+      }
+
+      if(btn.dataset.action==="save-card"){
+        const payload = {
+          id: tr.dataset.id,
+          minute: tr.querySelector('[data-f="minute"]').value,
+          player_token: tr.querySelector('[data-f="player_token"]').value,
+          color: tr.querySelector('[data-f="color"]').value,
+        };
+        const r = await api("update_card", payload);
+        if(r.ok){ await loadList(); }
+      }
+
+      if(btn.dataset.action==="del-card"){
+        if(confirm("Supprimer ce carton ?")){
+          const r = await api("delete_card", {id: tr.dataset.id});
+          if(r.ok){ tr.remove(); }
+        }
+      }
+    });
+
+    document.addEventListener("change", async (e)=>{
+      const input = e.target;
+      if(input.type==="file" && input.dataset.player){
+        const pid = input.dataset.player;
+        if(!pid){ alert("Aucun joueur lié à cette ligne."); input.value=""; return; }
+        const fd = new FormData();
+        fd.append("player_id", pid);
+        fd.append("photo", input.files[0]);
+        const r = await api("upload_photo", fd, true);
+        if(r.ok){
+          const span = input.closest("td").querySelector(".mini-photo");
+          span.innerHTML = `\u003cimg src="${r.photo}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:1px solid #e5e7eb"/\u003e`;
+        }
+        input.value="";
+      }
+    });
+
+    // —— AU CHARGEMENT : restaure les sélections puis charge les listes —— 
+    restoreSelection();
+    // Si aucun match mémorisé, rien — l’utilisateur choisit et tout se mettra en place ensuite.
+  })();
+  </script>
+
+</div> {# /aq-container #}
+{% endblock %}

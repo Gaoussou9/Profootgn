@@ -32,42 +32,55 @@ export default function Standings() {
   }, []);
 
   const fetchData = async () => {
-    try {
-      const [stRes, liveRes] = await Promise.all([
-        api.get("stats/standings/?include_live=1"),
-        api.get("matches/live/"),
-      ]);
+  try {
+    const [stRes, liveRes] = await Promise.all([
+      // tu peux mettre ?debug=1 si tu veux voir les compteurs
+      api.get("stats/standings/?include_live=1"),
+      api.get("matches/live/"),
+    ]);
 
-      const st = Array.isArray(stRes.data) ? stRes.data : stRes.data.results || [];
-      const liveMatches = Array.isArray(liveRes.data) ? liveRes.data : liveRes.data.results || [];
+    // ✅ parser robuste: accepte array, {table: [...]}, {results: [...]}
+    const parseStandings = (data) => {
+      if (Array.isArray(data)) return data;
+      if (data && Array.isArray(data.table)) return data.table;
+      if (data && Array.isArray(data.results)) return data.results;
+      return [];
+    };
 
-      const liveIds = new Set(
-        liveMatches.flatMap((m) => [m.home_club, m.away_club]).filter(Boolean)
-      );
+    const st = parseStandings(stRes.data);
 
-      // détecte les changements pour surligner
-      const prev = prevRef.current;
-      const enriched = st.map((r) => {
-        const p = prev.get(r.club_id);
-        const changed = p
-          ? (p.points !== r.points) ||
-            (p.goal_diff !== r.goal_diff) ||
-            (p.goals_for !== r.goals_for) ||
-            (p.played !== r.played)
-          : false;
-        return { ...r, _changed: changed };
-      });
-      prevRef.current = new Map(enriched.map((r) => [r.club_id, r]));
+    const liveMatches = Array.isArray(liveRes.data)
+      ? liveRes.data
+      : liveRes.data?.results || [];
 
-      setRows(enriched);
-      setLiveSet(liveIds);
-      setError(null);
-    } catch (e) {
-      setError(e.message || "Erreur de chargement");
-    } finally {
-      setLoad(false);
-    }
-  };
+    const liveIds = new Set(
+      liveMatches.flatMap((m) => [m.home_club, m.away_club]).filter(Boolean)
+    );
+
+    // détecte les changements pour surligner
+    const prev = prevRef.current;
+    const enriched = st.map((r) => {
+      const p = prev.get(r.club_id);
+      const changed = p
+        ? p.points !== r.points ||
+          p.goal_diff !== r.goal_diff ||
+          p.goals_for !== r.goals_for ||
+          p.played !== r.played
+        : false;
+      return { ...r, _changed: changed };
+    });
+    prevRef.current = new Map(enriched.map((r) => [r.club_id, r]));
+
+    setRows(enriched);
+    setLiveSet(liveIds);
+    setError(null);
+  } catch (e) {
+    setError(e.message || "Erreur de chargement");
+  } finally {
+    setLoad(false);
+  }
+};
+
 
   useEffect(() => {
     fetchData();

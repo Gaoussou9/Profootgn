@@ -1,18 +1,29 @@
+# clubs/serializers.py
 from rest_framework import serializers
-from .models import Club
+from .models import Club, StaffMember
 
 class ClubSerializer(serializers.ModelSerializer):
-    logo_url = serializers.SerializerMethodField()
-
     class Meta:
         model = Club
-        # ajoute d'autres champs si tu en as besoin
-        fields = ["id", "name", "logo_url"]
+        fields = [
+            "id", "name", "short_name", "city", "founded",
+            "stadium", "logo", "president", "coach"
+        ]
 
-    def get_logo_url(self, obj):
-        logo = getattr(obj, "logo", None)
-        if not logo:
-            return None
-        request = self.context.get("request")
-        url = logo.url
-        return request.build_absolute_uri(url) if request else url
+
+class ClubMinimalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Club
+        fields = ['id', 'name', 'logo']
+
+
+class StaffSerializer(serializers.ModelSerializer):
+    club_name = serializers.CharField(source='club.name', read_only=True)
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = StaffMember
+        fields = [
+            'id','club','club_name','full_name','role',
+            'role_display','phone','email','photo','is_active'
+        ]
